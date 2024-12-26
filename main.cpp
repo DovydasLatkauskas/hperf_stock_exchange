@@ -148,6 +148,9 @@ void broadcast_market_data(const int sockfd, const sockaddr_in *broadcast_addr,
         perror("broadcast sendto failure");
         exit(EXIT_FAILURE);
     }
+
+    // TODO: remove
+    std::cout << msg << std::endl;
 }
 
 long currentUnixTime() {
