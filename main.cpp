@@ -438,7 +438,6 @@ int main() {
             }
 
             // HANDLE REQUEST HERE
-            // TODO: there must be a more optimal way (could use protobuf)
             // TODO: AUTH, request validation
             std::string msg_str(listen_buffer.get(), count);
             std::pair<bool, std::string> rsp = handle_request(&msg_str, &sellOrders, &buyOrders);
