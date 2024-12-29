@@ -7,11 +7,12 @@
 #include <chrono>
 #include <sys/epoll.h>
 #include <fcntl.h>
+#include "network_requests.capnp.h"
 
 #include <nlohmann/json.hpp>
 namespace json = nlohmann;
 
-#include <boost/uuid/uuid.hpp> // having a dependency on boost just for the uuid seems excessive
+#include <boost/uuid/uuid.hpp> // having a dependency on boost just for the uuid seems excessive // we might need it for other things too though
 #include <boost/uuid/uuid_generators.hpp>
 #include <set>
 #include <random>
@@ -31,14 +32,20 @@ enum RequestType {
     CANCEL
 };
 
-typedef struct{
-    int requesterId;
-    std::string stockId;
-    int orderAmount;
-    int priceCents;
-    RequestType orderType;
-    uint8_t cancelOrderId[16]; // optional
-} NetworkRequest;
+//typedef struct{
+//    int requesterId;
+//    std::string stockId;
+//    int orderAmount;
+//    int priceCents;
+//    RequestType orderType;
+//} MakeOrderRequest;
+//
+//typedef struct{
+//    int requesterId;
+//    std::string stockId;
+//    RequestType orderType;
+//    uint8_t cancelOrderId[16];
+//} CancelOrderRequest;
 
 // should I merge BuyOrder and SellOrder?
 struct BuyOrder {
@@ -70,9 +77,6 @@ struct SellOrder {
         return orderAtUnix < other.orderAtUnix;
     }
 };
-
-//auto compareSellOrder = [](SellOrder a, SellOrder b) { return a.priceCents > b.priceCents; };
-//auto compareBuyOrder = [](BuyOrder a, BuyOrder b) { return a.priceCents < b.priceCents; };
 
 void to_json(nlohmann::json& j, const BuyOrder& order) {
     j = nlohmann::json{
@@ -163,7 +167,7 @@ std::pair<bool, std::string> handle_request(std::string *requestMessage,
                     std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders) {
     json::json j = *requestMessage;
 
-    NetworkRequest request;
+    MakeOrderRequest request;
     request.requesterId = j.at("requesterId").get<int>();
     request.stockId = j.at("stockId").get<std::string>();
     request.orderAmount = j.at("orderAmount").get<int>();
