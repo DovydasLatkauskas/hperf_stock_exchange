@@ -20,7 +20,7 @@ struct CancelOrderRequest {
     cancelOrderId @3 :Data;
 }
 
-struct StockRequest {
+struct NetworkRequest {
     union {
         makeOrderRequest @0 :MakeOrderRequest;
         cancelOrderRequest @1 :CancelOrderRequest;
