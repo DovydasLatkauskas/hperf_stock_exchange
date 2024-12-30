@@ -13,9 +13,16 @@ enum OrderType {
   sell @1;
 }
 
-struct CancelOrderRequest{
+struct CancelOrderRequest {
     requesterId @0 :Int32;
     stockId @1 :Data;
     orderType @2 :OrderType;
     cancelOrderId @3 :Data;
+}
+
+struct StockRequest {
+    union {
+        makeOrderRequest @0 :MakeOrderRequest;
+        cancelOrderRequest @1 :CancelOrderRequest;
+    }
 }
