@@ -13,9 +13,6 @@
 #include <capnp/serialize.h>
 #include "network_requests.capnp.h"
 
-#include <nlohmann/json.hpp>
-namespace json = nlohmann;
-
 #include <boost/uuid/uuid.hpp> // having a dependency on boost just for the uuid seems excessive // we might need it for other things too though
 #include <boost/uuid/uuid_generators.hpp>
 
@@ -73,69 +70,6 @@ struct SellOrder {
         return orderAtUnix < other.orderAtUnix;
     }
 };
-
-void to_json(nlohmann::json& j, const BuyOrder& order) {
-    j = nlohmann::json{
-            {"orderId", order.orderId},
-            {"buyerId", order.buyerId},
-            {"stockId", order.stockId},
-            {"orderAmount", order.orderAmount},
-            {"priceCents", order.priceCents},
-            {"orderAtUnix", order.orderAtUnix}
-    };
-}
-
-void to_json(nlohmann::json& j, const SellOrder& order) {
-    j = nlohmann::json{
-            {"orderId", order.orderId},
-            {"sellerId", order.sellerId},
-            {"stockId", order.stockId},
-            {"orderAmount", order.orderAmount},
-            {"priceCents", order.priceCents},
-            {"orderAtUnix", order.orderAtUnix}
-    };
-}
-
-
-// TODO: change for more efficient message format
-std::string ordersToString(std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
-                           std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders) {
-    json::json j;
-
-    for (const auto &pair : *sellOrders) {
-        const std::string &stockId = pair.first;
-        const std::set<SellOrder> &orders = pair.second;
-
-        for (const SellOrder &order : orders) {
-            j["sellOrders"].push_back({
-              {"stockId", order.stockId},
-              {"sellerId", order.sellerId},
-              {"orderAmount", order.orderAmount},
-              {"priceCents", order.priceCents},
-              {"orderAtUnix", order.orderAtUnix},
-              {"orderId", std::vector<uint8_t>(std::begin(order.orderId), std::end(order.orderId))}
-            });
-        }
-    }
-
-    for (const auto &pair : *buyOrders) {
-        const std::string &stockId = pair.first;
-        const std::set<BuyOrder> &orders = pair.second;
-
-        for (const BuyOrder &order : orders) {
-            j["buyOrders"].push_back({
-             {"stockId", order.stockId},
-             {"buyerId", order.buyerId},
-             {"orderAmount", order.orderAmount},
-             {"priceCents", order.priceCents},
-             {"orderAtUnix", order.orderAtUnix},
-             {"orderId", std::vector<uint8_t>(std::begin(order.orderId), std::end(order.orderId))}
-            });
-        }
-    }
-
-    return j.dump();
-}
 
 
 void broadcast_market_data(const int sockfd, const sockaddr_in *broadcast_addr,
