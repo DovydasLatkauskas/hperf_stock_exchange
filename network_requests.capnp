@@ -4,7 +4,7 @@ struct MakeOrderRequest {
     requesterId @0 :Int32;
     stockId @1 :Text;
     orderAmount @2 :Int32;
-    priceCents @3 :Int32;
+    unitPriceCents @3 :Int32;
     orderType @4 :OrderType;
 }
 
