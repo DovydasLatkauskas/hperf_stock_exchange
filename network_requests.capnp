@@ -15,7 +15,7 @@ enum OrderType {
 
 struct CancelOrderRequest {
     requesterId @0 :Int32;
-    stockId @1 :Data;
+    stockId @1 :Text;
     orderType @2 :OrderType;
     cancelOrderId @3 :Data;
 }
