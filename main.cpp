@@ -7,6 +7,10 @@
 #include <chrono>
 #include <sys/epoll.h>
 #include <fcntl.h>
+#include <set>
+#include <random>
+
+#include <capnp/serialize.h>
 #include "network_requests.capnp.h"
 
 #include <nlohmann/json.hpp>
@@ -14,8 +18,6 @@ namespace json = nlohmann;
 
 #include <boost/uuid/uuid.hpp> // having a dependency on boost just for the uuid seems excessive // we might need it for other things too though
 #include <boost/uuid/uuid_generators.hpp>
-#include <set>
-#include <random>
 
 namespace uuid = boost::uuids;
 
@@ -25,12 +27,6 @@ namespace uuid = boost::uuids;
 
 #define BROADCAST_TIMEOUT_MS 1000
 #define MAXEVENTS 1 // open tcp connections + 1
-
-enum RequestType {
-    BUY,
-    SELL,
-    CANCEL
-};
 
 //typedef struct{
 //    int requesterId;
@@ -161,83 +157,6 @@ long currentUnixTime() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-// returns whether a new order has been created and the stock
-std::pair<bool, std::string> handle_request(std::string *requestMessage,
-                    std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
-                    std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders) {
-    json::json j = *requestMessage;
-
-    MakeOrderRequest request;
-    request.requesterId = j.at("requesterId").get<int>();
-    request.stockId = j.at("stockId").get<std::string>();
-    request.orderAmount = j.at("orderAmount").get<int>();
-    request.priceCents = j.at("priceCents").get<int>();
-
-    std::string type = j.at("orderType").get<std::string>();
-    if (type == "BUY") {
-        request.orderType = RequestType::BUY;
-
-        BuyOrder order;
-        order.priceCents = request.priceCents;
-        order.stockId = request.stockId;
-        order.buyerId = request.requesterId;
-        order.orderAmount = request.orderAmount;
-        order.orderAtUnix = currentUnixTime();
-
-        uuid::random_generator generator;
-        uuid::uuid uuid = generator();
-        std::copy(uuid.begin(), uuid.end(), order.orderId);
-
-        (*buyOrders)[request.stockId].insert(order);
-        return std::make_pair(true, request.stockId);
-    } else if (type == "SELL") {
-        request.orderType = RequestType::SELL;
-
-        SellOrder order;
-        order.priceCents = request.priceCents;
-        order.stockId = request.stockId;
-        order.sellerId = request.requesterId;
-        order.orderAmount = request.orderAmount;
-        order.orderAtUnix = currentUnixTime();
-
-        uuid::random_generator generator;
-        uuid::uuid uuid = generator();
-        std::copy(uuid.begin(), uuid.end(), order.orderId);
-
-        (*sellOrders)[request.stockId].insert(order);
-        return std::make_pair(true, request.stockId);
-    } else if (type == "CANCEL") { // horrible implementation should redo?
-        request.orderType = RequestType::CANCEL;
-        std::vector<uint8_t> cancelOrderIdVec = j.at("cancelOrderId").get<std::vector<uint8_t>>();
-        std::copy(cancelOrderIdVec.begin(), cancelOrderIdVec.end(), request.cancelOrderId);
-
-        if (sellOrders->find(request.stockId) != sellOrders->end()) {
-            auto &sellSet = (*sellOrders)[request.stockId];
-            auto it = std::find_if(sellSet.begin(), sellSet.end(), [&request](const SellOrder &order) {
-                return std::equal(std::begin(order.orderId), std::end(order.orderId), std::begin(request.cancelOrderId));
-            });
-            if (it != sellSet.end()) {
-                sellSet.erase(it);
-                return std::make_pair(false, request.stockId);
-            }
-        }
-
-        if (buyOrders->find(request.stockId) != buyOrders->end()) {
-            auto &buySet = (*buyOrders)[request.stockId];
-            auto it = std::find_if(buySet.begin(), buySet.end(), [&request](const BuyOrder &order) {
-                return std::equal(std::begin(order.orderId), std::end(order.orderId), std::begin(request.cancelOrderId));
-            });
-            if (it != buySet.end()) {
-                buySet.erase(it);
-                return std::make_pair(false, request.stockId);
-            }
-        }
-
-        std::cerr << "Order ID not found for cancellation: " << request.stockId << std::endl; // TODO: return error to caller
-    }
-    return std::make_pair(false, request.stockId);
-}
-
 void generateRandomOrderId(uint8_t* id, size_t length) {
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -325,10 +244,82 @@ void match_orders(std::unordered_map<std::string, std::set<SellOrder>> *sellOrde
     }
 }
 
+// returns whether a new order has been created and the stock
+std::pair<bool, std::string> handleMakeOrderRequest(NetworkRequest::Reader *requestReaderPtr,
+                                                    std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
+                                                    std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders) {
+    auto req = (*requestReaderPtr).getMakeOrderRequest();
+
+    if(req.getOrderType() == OrderType::BUY){
+        BuyOrder order;
+        order.priceCents = req.getPriceCents();
+        order.stockId = req.getStockId();
+        order.buyerId = req.getRequesterId();
+        order.orderAmount = req.getOrderAmount();
+        order.orderAtUnix = currentUnixTime();
+
+        uuid::random_generator generator;
+        uuid::uuid uuid = generator();
+        std::copy(uuid.begin(), uuid.end(), order.orderId);
+
+        (*buyOrders)[order.stockId].insert(order);
+        return std::make_pair(true, order.stockId);
+    } else {
+        SellOrder order;
+        order.priceCents = req.getPriceCents();
+        order.stockId = req.getStockId();
+        order.sellerId = req.getRequesterId();
+        order.orderAmount = req.getOrderAmount();
+        order.orderAtUnix = currentUnixTime();
+
+        uuid::random_generator generator;
+        uuid::uuid uuid = generator();
+        std::copy(uuid.begin(), uuid.end(), order.orderId);
+
+        (*sellOrders)[order.stockId].insert(order);
+        return std::make_pair(true, order.stockId);
+    }
+}
+
+// returns whether a new order has been created and the stock
+std::pair<bool, std::string> handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr,
+                                                      std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
+                                                      std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders) {
+    auto req = (*requestReaderPtr).getCancelOrderRequest();
+
+    auto bytes = req.getCancelOrderId().asBytes();
+    std::array<uint8_t, 16> cancelOrderId;
+    std::copy(bytes.begin(), bytes.end(), cancelOrderId.begin());
+
+
+    if (sellOrders->find(req.getStockId()) != sellOrders->end()) {
+        auto &sellSet = (*sellOrders)[req.getStockId()];
+        auto it = std::find_if(sellSet.begin(), sellSet.end(), [&cancelOrderId](const SellOrder &order) {
+            return std::equal(order.orderId, order.orderId + 16, cancelOrderId.begin());
+        });
+        if (it != sellSet.end()) {
+            sellSet.erase(it);
+            return std::make_pair(false, req.getStockId());
+        }
+    }
+
+    if (buyOrders->find(req.getStockId()) != buyOrders->end()) {
+        auto &buySet = (*buyOrders)[req.getStockId()];
+        auto it = std::find_if(buySet.begin(), buySet.end(), [&cancelOrderId](const BuyOrder &order) {
+            return std::equal(order.orderId, order.orderId + 16, cancelOrderId.begin());
+        });
+        if (it != buySet.end()) {
+            buySet.erase(it);
+            return std::make_pair(false, req.getStockId());
+        }
+    }
+
+    std::cerr << "Order ID not found for cancellation: " << req.getStockId().cStr() << std::endl; // TODO: return error to caller
+    return std::make_pair(false, req.getStockId());
+}
+
 int main() {
     // global declarations
-    std::unique_ptr<char[]> listen_buffer(new char[4096]);
-
     // matching engine data structures
     std::unordered_map<std::string, std::set<SellOrder>> sellOrders; // using a hashmap of red black binary search tress
     std::unordered_map<std::string, std::set<BuyOrder>> buyOrders; // should I use another DS?
@@ -387,7 +378,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    if (listen(listenfd, 20) == -1) {
+    if (listen(listenfd, 64) == -1) {
         perror("listen failed");
         return EXIT_FAILURE;
     }
@@ -430,26 +421,28 @@ int main() {
             int client_fd = accept(listenfd, (struct sockaddr *)&client_addr, &client_addr_len);
             if(client_fd == -1){
                 perror("accept failed");
-                exit(EXIT_FAILURE);
             }
-            ssize_t count = read(client_fd, listen_buffer.get(), sizeof(listen_buffer));
-            if (count == -1) {
-                perror("read failed");
+            else {
+                // TODO: AUTH, request validation
+                capnp::StreamFdMessageReader messageReader(client_fd);
+                auto request = messageReader.getRoot<NetworkRequest>();
+                std::pair<bool, std::string> rsp;
+                if(request.isMakeOrderRequest()){
+                    rsp = handleMakeOrderRequest(&request, &sellOrders, &buyOrders);
+                } else if(request.isCancelOrderRequest()){
+                    rsp = handleCancelOrderRequest(&request, &sellOrders, &buyOrders);
+                } else {
+                    perror("unknown request type");
+                }
+
+                // perform matching
+                if(rsp.first){
+                    match_orders(&sellOrders, &buyOrders, &(rsp.second));
+                }
+                // TODO: provide a response
+
+                close(client_fd);
             }
-
-            // HANDLE REQUEST HERE
-            // TODO: AUTH, request validation
-            std::string msg_str(listen_buffer.get(), count);
-            std::pair<bool, std::string> rsp = handle_request(&msg_str, &sellOrders, &buyOrders);
-
-            // perform matching
-            if(rsp.first){
-                match_orders(&sellOrders, &buyOrders, &(rsp.second));
-            }
-
-            // TODO: provide a response
-
-            close(client_fd);
         }
         // broadcast_opt requests to buy/sell
         broadcast_market_data(broadcastfd, &broadcast_addr, &sellOrders, &buyOrders);
