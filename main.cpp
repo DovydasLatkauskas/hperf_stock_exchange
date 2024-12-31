@@ -12,8 +12,9 @@
 
 #include <capnp/serialize.h>
 #include "network_requests.capnp.h"
+#include "exchange_orders_broadcast.capnp.h"
 
-#include <boost/uuid/uuid.hpp> // having a dependency on boost just for the uuid seems excessive // we might need it for other things too though
+#include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 
 namespace uuid = boost::uuids;
@@ -25,33 +26,17 @@ namespace uuid = boost::uuids;
 #define BROADCAST_TIMEOUT_MS 1000
 #define MAXEVENTS 1 // open tcp connections + 1
 
-//typedef struct{
-//    int requesterId;
-//    std::string stockId;
-//    int orderAmount;
-//    int priceCents;
-//    RequestType orderType;
-//} MakeOrderRequest;
-//
-//typedef struct{
-//    int requesterId;
-//    std::string stockId;
-//    RequestType orderType;
-//    uint8_t cancelOrderId[16];
-//} CancelOrderRequest;
 
-// should I merge BuyOrder and SellOrder?
 struct BuyOrder {
     uint8_t orderId[16];
     int buyerId;
-    std::string stockId;
     mutable int orderAmount; // need mutability for order matching, make sure to not use in comparison overload
-    int priceCents;
+    int unitPriceCents;
     long orderAtUnix;
 
     bool operator<(const BuyOrder& other) const {
-        if (priceCents != other.priceCents) // hot loop, can remove for performance
-            return priceCents > other.priceCents;
+        if (unitPriceCents != other.unitPriceCents) // hot loop, can remove for performance
+            return unitPriceCents > other.unitPriceCents;
         return orderAtUnix < other.orderAtUnix;
     }
 };
@@ -59,32 +44,68 @@ struct BuyOrder {
 struct SellOrder {
     uint8_t orderId[16];
     int sellerId;
-    std::string stockId;
     mutable int orderAmount; // need mutability for order matching, make sure to not use in comparison overload
-    int priceCents;
+    int unitPriceCents;
     long orderAtUnix;
 
     bool operator<(const SellOrder& other) const {
-        if (priceCents != other.priceCents)
-            return priceCents < other.priceCents;
+        if (unitPriceCents != other.unitPriceCents)
+            return unitPriceCents < other.unitPriceCents;
         return orderAtUnix < other.orderAtUnix;
     }
 };
 
+// do dynamic size structs have any issues?
+struct Orders {
+    std::set<BuyOrder> buyOrders;
+    std::set<SellOrder> sellOrders;
+};
 
 void broadcast_market_data(const int sockfd, const sockaddr_in *broadcast_addr,
-                           std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
-                           std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders) {
-    std::string msg = ordersToString(sellOrders, buyOrders);
+                           std::unordered_map<std::string, Orders> *ordersPtr) {
 
-    if(sendto(sockfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&(*broadcast_addr), sizeof *broadcast_addr)
-       == -1){
-        perror("broadcast sendto failure");
-        exit(EXIT_FAILURE);
+    auto ordersMap = *ordersPtr;
+    capnp::MallocMessageBuilder message;
+
+    BroadcastStruct::Builder broadcastMsg = message.initRoot<BroadcastStruct>();
+    capnp::List<StockIdOrderListsTuple>::Builder stocks = broadcastMsg.initOrders(ordersMap.size());
+
+    int i = 0;
+    for (const auto& pair : ordersMap) {
+        StockIdOrderListsTuple::Builder tuple = stocks[i];
+        tuple.setStockId(pair.first);
+        auto sOrders = tuple.initSellOrders(pair.second.sellOrders.size());
+        auto bOrders = tuple.initBuyOrders(pair.second.buyOrders.size());
+        int j = 0;
+        for (const auto& sellOrders : pair.second.sellOrders) {
+            SellOrderPublic::Builder sop = sOrders[j];
+            sop.setOrderAmount(sellOrders.orderAmount);
+            sop.setUnitPriceCents(sellOrders.unitPriceCents);
+            ++j;
+        }
+        j = 0;
+        for (const auto& buyOrders : pair.second.buyOrders) {
+            BuyOrderPublic::Builder bop = bOrders[j];
+            bop.setOrderAmount(buyOrders.orderAmount);
+            bop.setUnitPriceCents(buyOrders.unitPriceCents);
+            ++j;
+        }
+        ++i;
     }
 
-    // TODO: remove
-    std::cout << msg << std::endl;
+    kj::VectorOutputStream bufferStream;
+    capnp::writeMessage(bufferStream, message);
+    auto serializedData = bufferStream.getArray();
+
+    ssize_t bytesSent = sendto(sockfd, serializedData.begin(), serializedData.size(),
+                               0, (struct sockaddr*)broadcast_addr, sizeof(*broadcast_addr));
+
+
+    if (bytesSent == -1) {
+        perror("sendto failed");
+    } else {
+        printf("Broadcasted %zd bytes.\n", bytesSent);
+    }
 }
 
 long currentUnixTime() {
@@ -101,8 +122,7 @@ void generateRandomOrderId(uint8_t* id, size_t length) {
     }
 }
 
-void populate_exchange_with_test_data(std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
-                                      std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders,
+void populate_exchange_with_test_data(std::unordered_map<std::string, Orders> *orders,
                                       std::vector<std::string> *stockList) {
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -114,80 +134,75 @@ void populate_exchange_with_test_data(std::unordered_map<std::string, std::set<S
 
     for (const auto& stock : *stockList) {
         for (int i = 0; i < 5; ++i) {
-            BuyOrder bOrder;
-            generateRandomOrderId(bOrder.orderId, 16);
-            bOrder.buyerId = traderIdDist(gen);
-            bOrder.stockId = stock;
-            bOrder.orderAmount = amountDist(gen);
-            bOrder.priceCents = buyPriceDist(gen);
-            bOrder.orderAtUnix = currentUnixTime();
-
-            (*buyOrders)[stock].insert(bOrder);
-        }
-
-        for (int i = 0; i < 5; ++i) {
             SellOrder sOrder;
             generateRandomOrderId(sOrder.orderId, 16);
             sOrder.sellerId = traderIdDist(gen);
-            sOrder.stockId = stock;
             sOrder.orderAmount = amountDist(gen);
-            sOrder.priceCents = sellPriceDist(gen);
+            sOrder.unitPriceCents = sellPriceDist(gen);
             sOrder.orderAtUnix = currentUnixTime();
 
-            (*sellOrders)[stock].insert(sOrder);
+            (*orders)[stock].sellOrders.insert(sOrder);
+        }
+
+        for (int i = 0; i < 5; ++i) {
+            BuyOrder bOrder;
+            generateRandomOrderId(bOrder.orderId, 16);
+            bOrder.buyerId = traderIdDist(gen);
+            bOrder.orderAmount = amountDist(gen);
+            bOrder.unitPriceCents = buyPriceDist(gen);
+            bOrder.orderAtUnix = currentUnixTime();
+
+            (*orders)[stock].buyOrders.insert(bOrder);
         }
     }
 }
 
 // TODO: implement real
 void notify_of_sale(std::set<SellOrder>::iterator sellOrder, std::set<BuyOrder>::iterator buyOrder,
-                    int unitPriceCents, int amount) {
-    std::cout << "Sale happened: " << amount << " units of " << sellOrder->stockId
+                    int unitPriceCents, int amount, std::string *stockId) {
+    std::cout << "Sale happened: " << amount << " units of " << *stockId
               << " at " << unitPriceCents << " cents per unit.\n"
               << "Seller ID: " << sellOrder->sellerId << ", Buyer ID: " << buyOrder->buyerId << std::endl;
 }
 
-void match_orders(std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
-                  std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders,
+void match_orders(std::unordered_map<std::string, Orders> *orders,
                   std::string *stock) {
-    std::set<SellOrder> sOrders = (*sellOrders)[*stock];
-    std::set<BuyOrder> bOrders = (*buyOrders)[*stock];
-    auto bIt = bOrders.begin();
-    auto sIt = sOrders.begin();
+    std::set<SellOrder> *sOrders = &(*orders)[*stock].sellOrders;
+    std::set<BuyOrder> *bOrders = &(*orders)[*stock].buyOrders;
+    auto bIt = (*bOrders).begin();
+    auto sIt = (*sOrders).begin();
 
-    while (sIt != sOrders.end() && bIt != bOrders.end()
-        && sIt->priceCents <= bIt->priceCents) {
-        int unitPriceCents = (sIt->orderAtUnix < bIt->orderAtUnix) ? sIt->priceCents : bIt->priceCents;
+    while (sIt != (*sOrders).end() && bIt != (*bOrders).end()
+        && sIt->unitPriceCents <= bIt->unitPriceCents) {
+        int unitPriceCents = (sIt->orderAtUnix < bIt->orderAtUnix) ? sIt->unitPriceCents : bIt->unitPriceCents;
 
         if(sIt->orderAmount < bIt->orderAmount){
-            notify_of_sale(sIt, bIt, unitPriceCents, sIt->orderAmount);
+            notify_of_sale(sIt, bIt, unitPriceCents, sIt->orderAmount, stock);
             bIt->orderAmount -= sIt->orderAmount;
             sIt->orderAmount = 0;
         } else {
-            notify_of_sale(sIt, bIt, unitPriceCents, bIt->orderAmount);
+            notify_of_sale(sIt, bIt, unitPriceCents, bIt->orderAmount, stock);
             sIt->orderAmount -= bIt->orderAmount;
             bIt->orderAmount = 0;
         }
 
         if(bIt->orderAmount <= 0){
-            bIt = bOrders.erase(bIt); // also iterates to the next one
+            bIt = (*bOrders).erase(bIt); // also iterates to the next one
         }
         if(sIt->orderAmount <= 0){
-            sIt = sOrders.erase(sIt);
+            sIt = (*sOrders).erase(sIt);
         }
     }
 }
 
 // returns whether a new order has been created and the stock
 std::pair<bool, std::string> handleMakeOrderRequest(NetworkRequest::Reader *requestReaderPtr,
-                                                    std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
-                                                    std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders) {
+                                                    std::unordered_map<std::string, Orders> *orders) {
     auto req = (*requestReaderPtr).getMakeOrderRequest();
 
     if(req.getOrderType() == OrderType::BUY){
         BuyOrder order;
-        order.priceCents = req.getPriceCents();
-        order.stockId = req.getStockId();
+        order.unitPriceCents = req.getPriceCents();
         order.buyerId = req.getRequesterId();
         order.orderAmount = req.getOrderAmount();
         order.orderAtUnix = currentUnixTime();
@@ -196,12 +211,11 @@ std::pair<bool, std::string> handleMakeOrderRequest(NetworkRequest::Reader *requ
         uuid::uuid uuid = generator();
         std::copy(uuid.begin(), uuid.end(), order.orderId);
 
-        (*buyOrders)[order.stockId].insert(order);
-        return std::make_pair(true, order.stockId);
+        (*orders)[req.getStockId()].buyOrders.insert(order);
+        return std::make_pair(true, req.getStockId());
     } else {
         SellOrder order;
-        order.priceCents = req.getPriceCents();
-        order.stockId = req.getStockId();
+        order.unitPriceCents = req.getPriceCents();
         order.sellerId = req.getRequesterId();
         order.orderAmount = req.getOrderAmount();
         order.orderAtUnix = currentUnixTime();
@@ -210,40 +224,39 @@ std::pair<bool, std::string> handleMakeOrderRequest(NetworkRequest::Reader *requ
         uuid::uuid uuid = generator();
         std::copy(uuid.begin(), uuid.end(), order.orderId);
 
-        (*sellOrders)[order.stockId].insert(order);
-        return std::make_pair(true, order.stockId);
+        (*orders)[req.getStockId()].sellOrders.insert(order);
+        return std::make_pair(true, req.getStockId());
     }
 }
 
 // returns whether a new order has been created and the stock
 std::pair<bool, std::string> handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr,
-                                                      std::unordered_map<std::string, std::set<SellOrder>> *sellOrders,
-                                                      std::unordered_map<std::string, std::set<BuyOrder>> *buyOrders) {
+                                                      std::unordered_map<std::string, Orders> *orders) {
     auto req = (*requestReaderPtr).getCancelOrderRequest();
 
     auto bytes = req.getCancelOrderId().asBytes();
     std::array<uint8_t, 16> cancelOrderId;
     std::copy(bytes.begin(), bytes.end(), cancelOrderId.begin());
+    auto stockId = req.getStockId();
 
+    auto sellOrders = &(*orders)[stockId].sellOrders;
+    auto sIt = sellOrders->begin();
+    auto sEnd = sellOrders->end();
 
-    if (sellOrders->find(req.getStockId()) != sellOrders->end()) {
-        auto &sellSet = (*sellOrders)[req.getStockId()];
-        auto it = std::find_if(sellSet.begin(), sellSet.end(), [&cancelOrderId](const SellOrder &order) {
-            return std::equal(order.orderId, order.orderId + 16, cancelOrderId.begin());
-        });
-        if (it != sellSet.end()) {
-            sellSet.erase(it);
+    while(sIt != sEnd){
+        if(std::equal(sIt->orderId, sIt->orderId + 16, cancelOrderId.begin())){
+            sellOrders->erase(sIt);
             return std::make_pair(false, req.getStockId());
         }
     }
 
-    if (buyOrders->find(req.getStockId()) != buyOrders->end()) {
-        auto &buySet = (*buyOrders)[req.getStockId()];
-        auto it = std::find_if(buySet.begin(), buySet.end(), [&cancelOrderId](const BuyOrder &order) {
-            return std::equal(order.orderId, order.orderId + 16, cancelOrderId.begin());
-        });
-        if (it != buySet.end()) {
-            buySet.erase(it);
+    auto buyOrders = &(*orders)[req.getStockId()].sellOrders;
+    auto bIt = buyOrders->begin();
+    auto bEnd = buyOrders->end();
+
+    while(bIt != bEnd){
+        if(std::equal(bIt->orderId, bIt->orderId + 16, cancelOrderId.begin())){
+            buyOrders->erase(bIt);
             return std::make_pair(false, req.getStockId());
         }
     }
@@ -255,19 +268,19 @@ std::pair<bool, std::string> handleCancelOrderRequest(NetworkRequest::Reader *re
 int main() {
     // global declarations
     // matching engine data structures
-    std::unordered_map<std::string, std::set<SellOrder>> sellOrders; // using a hashmap of red black binary search tress
-    std::unordered_map<std::string, std::set<BuyOrder>> buyOrders; // should I use another DS?
+
+    std::unordered_map<std::string, Orders> orders; // using a hashmap of red black binary search tress // should I use another DS?
 
     std::vector<std::string> stockList = {"AAPL", "GOOGL", "AMZN", "MSFT"};
     for(const auto& stock : stockList){
-        sellOrders.emplace(stock, std::set<SellOrder>());
-        buyOrders.emplace(stock, std::set<BuyOrder>());
+        orders[stock].sellOrders = std::set<SellOrder>();
+        orders[stock].buyOrders = std::set<BuyOrder>();
     }
 
     // TODO: remove
-    populate_exchange_with_test_data(&sellOrders, &buyOrders, &stockList);
+    populate_exchange_with_test_data(&orders, &stockList);
     for(auto& stock : stockList){
-        match_orders(&sellOrders, &buyOrders, &stock);
+        match_orders(&orders, &stock);
     }
 
     // create broadcast socket
@@ -349,37 +362,36 @@ int main() {
             exit(EXIT_FAILURE);
         }
         // handle matching requests
-        if(events[0].events & EPOLLIN){
+        if(events[0].events & EPOLLIN && !(events[0].events & EPOLLERR)){
             struct sockaddr_in client_addr;
             socklen_t client_addr_len = sizeof(client_addr);
             int client_fd = accept(listenfd, (struct sockaddr *)&client_addr, &client_addr_len);
             if(client_fd == -1){
                 perror("accept failed");
             }
-            else {
-                // TODO: AUTH, request validation
-                capnp::StreamFdMessageReader messageReader(client_fd);
-                auto request = messageReader.getRoot<NetworkRequest>();
-                std::pair<bool, std::string> rsp;
-                if(request.isMakeOrderRequest()){
-                    rsp = handleMakeOrderRequest(&request, &sellOrders, &buyOrders);
-                } else if(request.isCancelOrderRequest()){
-                    rsp = handleCancelOrderRequest(&request, &sellOrders, &buyOrders);
-                } else {
-                    perror("unknown request type");
-                }
 
-                // perform matching
-                if(rsp.first){
-                    match_orders(&sellOrders, &buyOrders, &(rsp.second));
-                }
-                // TODO: provide a response
-
-                close(client_fd);
+            // TODO: AUTH, request validation
+            capnp::StreamFdMessageReader messageReader(client_fd);
+            auto request = messageReader.getRoot<NetworkRequest>();
+            std::pair<bool, std::string> rsp;
+            if(request.isMakeOrderRequest()){
+                rsp = handleMakeOrderRequest(&request, &orders);
+            } else if(request.isCancelOrderRequest()){
+                rsp = handleCancelOrderRequest(&request, &orders);
+            } else {
+                perror("unknown request type");
             }
+
+            // perform matching
+            if(rsp.first){
+                match_orders(&orders, &(rsp.second));
+            }
+            // TODO: provide a response
+
+            close(client_fd);
         }
         // broadcast_opt requests to buy/sell
-        broadcast_market_data(broadcastfd, &broadcast_addr, &sellOrders, &buyOrders);
+        broadcast_market_data(broadcastfd, &broadcast_addr, &orders);
     }
     return 0;
 }
