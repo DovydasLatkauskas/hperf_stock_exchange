@@ -10,7 +10,7 @@
 #include <set>
 #include <random>
 
-#include <capnp/serialize.h>
+#include <capnp/serialize-packed.h>
 #include "network_requests.capnp.h"
 #include "exchange_orders_broadcast.capnp.h"
 
@@ -94,7 +94,7 @@ void broadcast_market_data(const int sockfd, const sockaddr_in *broadcast_addr,
     }
 
     kj::VectorOutputStream bufferStream;
-    capnp::writeMessage(bufferStream, message);
+    capnp::writePackedMessage(bufferStream, message); // TODO: benchmark against unpacked serialization
     auto serializedData = bufferStream.getArray();
 
     ssize_t bytesSent = sendto(sockfd, serializedData.begin(), serializedData.size(),
@@ -104,7 +104,13 @@ void broadcast_market_data(const int sockfd, const sockaddr_in *broadcast_addr,
     if (bytesSent == -1) {
         perror("sendto failed");
     } else {
-        printf("Broadcasted %zd bytes.\n", bytesSent);
+        printf("Broadcasted %zd bytes.\n", bytesSent); // TODO: remove
+    }
+
+    if (serializedData.size() > 65507) { // 65535 - 8 (UDP header) - 20 (IP header) // TODO: what if there's more data than UDP supports?
+
+        fprintf(stderr, "Packet size exceeds UDP limit: %zu bytes\n", serializedData.size());
+        return;
     }
 }
 
@@ -129,11 +135,11 @@ void populate_exchange_with_test_data(std::unordered_map<std::string, Orders> *o
     std::uniform_int_distribution<> traderIdDist(100, 9999);
     std::uniform_int_distribution<> amountDist(1, 100);
     std::uniform_int_distribution<> buyPriceDist(500, 2000);
-    std::uniform_int_distribution<> sellPriceDist(1500, 3000);
+    std::uniform_int_distribution<> sellPriceDist(1900, 3000);
 
 
     for (const auto& stock : *stockList) {
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 25; ++i) {
             SellOrder sOrder;
             generateRandomOrderId(sOrder.orderId, 16);
             sOrder.sellerId = traderIdDist(gen);
@@ -144,7 +150,7 @@ void populate_exchange_with_test_data(std::unordered_map<std::string, Orders> *o
             (*orders)[stock].sellOrders.insert(sOrder);
         }
 
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 25; ++i) {
             BuyOrder bOrder;
             generateRandomOrderId(bOrder.orderId, 16);
             bOrder.buyerId = traderIdDist(gen);
@@ -271,7 +277,7 @@ int main() {
 
     std::unordered_map<std::string, Orders> orders; // using a hashmap of red black binary search tress // should I use another DS?
 
-    std::vector<std::string> stockList = {"AAPL", "GOOGL", "AMZN", "MSFT"};
+    std::vector<std::string> stockList = {"AAPL", "GOOGL", "AMZN", "MSFT", "TSLA", "FB", "NFLX", "NVDA", "BABA", "INTC", "CSCO", "ORCL", "IBM", "ADBE", "CRM", "PYPL", "QCOM", "AMD", "TXN", "AVGO"};
     for(const auto& stock : stockList){
         orders[stock].sellOrders = std::set<SellOrder>();
         orders[stock].buyOrders = std::set<BuyOrder>();
