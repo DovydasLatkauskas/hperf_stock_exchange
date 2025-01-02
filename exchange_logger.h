@@ -48,8 +48,8 @@ public:
         outfile_.close();
     }
 
-    void log_order(LogLevel level, const uint8_t* orderId, 
-                  const std::string& symbol, int price, int quantity) {
+    void log_order(const LogLevel level, const uint8_t* orderId,
+                  const std::string& symbol, const int price, const int quantity) {
         ExchangeLogMessage msg{
             .level = level,
             .timestamp = get_current_time(),
@@ -63,7 +63,7 @@ public:
     }
 
     void log_trade(const uint8_t* buyOrderId, const uint8_t* sellOrderId,
-                  const std::string& symbol, int price, int quantity) {
+                  const std::string& symbol, const int price, const int quantity) {
         ExchangeLogMessage msg{
             .level = LogLevel::INFO,
             .timestamp = get_current_time(),
@@ -77,7 +77,7 @@ public:
         enqueue_message(msg);
     }
 
-    void log_system(LogLevel level, const std::string& message) {
+    void log_system(const LogLevel level, const std::string& message) {
         ExchangeLogMessage msg{
             .level = level,
             .timestamp = get_current_time(),
@@ -97,9 +97,9 @@ private:
     std::condition_variable cv_;
 
     static std::string get_current_time() {
-        auto now = std::chrono::system_clock::now();
-        auto now_time = std::chrono::system_clock::to_time_t(now);
-        auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        const auto now = std::chrono::system_clock::now();
+        const auto now_time = std::chrono::system_clock::to_time_t(now);
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             now.time_since_epoch()) % 1000;
         
         std::stringstream ss;
@@ -108,7 +108,7 @@ private:
         return ss.str();
     }
 
-    static std::string level_to_string(LogLevel level) {
+    static std::string level_to_string(const LogLevel level) {
         switch (level) {
             case LogLevel::DEBUG:   return "DEBUG";
             case LogLevel::INFO:    return "INFO";
@@ -141,15 +141,15 @@ private:
             });
             
             while (!message_queue_.empty()) {
-                const auto& msg = message_queue_.front();
+                const ExchangeLogMessage& msg = message_queue_.front();
                 
                 outfile_ << msg.timestamp << " ["
                         << level_to_string(msg.level) << "] "
                         << msg.message;
 
                 bool hasOrderId = false;
-                for (int i = 0; i < 16; i++) {
-                    if (msg.orderId[i] != 0) {
+                for (const unsigned char i : msg.orderId) {
+                    if (i != 0) {
                         hasOrderId = true;
                         break;
                     }
@@ -174,8 +174,6 @@ private:
             
             outfile_.flush();
             lock.unlock();
-            
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 };
