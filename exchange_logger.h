@@ -9,7 +9,8 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
-#include <cstring> // for memcpy
+#include <cstring>
+#include <condition_variable>
 
 class ExchangeLogger {
 public:
@@ -93,6 +94,7 @@ private:
     std::mutex queue_mutex_;
     std::atomic<bool> running_{true};
     std::thread logger_thread_;
+    std::condition_variable cv_;
 
     static std::string get_current_time() {
         auto now = std::chrono::system_clock::now();
@@ -128,11 +130,15 @@ private:
     void enqueue_message(const ExchangeLogMessage& msg) {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         message_queue_.push(msg);
+        cv_.notify_one();
     }
 
     void process_logs() {
         while (running_) {
             std::unique_lock<std::mutex> lock(queue_mutex_);
+            cv_.wait(lock, [this]() {
+                return !message_queue_.empty() || !running_;
+            });
             
             while (!message_queue_.empty()) {
                 const auto& msg = message_queue_.front();
