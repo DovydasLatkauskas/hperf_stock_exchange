@@ -10,6 +10,8 @@
 #include <set>
 #include <random>
 
+#include "exchange_logger.h"
+
 #include <capnp/serialize-packed.h>
 #include "capnp/cpp implementations/network_requests.capnp.h"
 #include "capnp/cpp implementations/exchange_orders_broadcast.capnp.h"
@@ -28,6 +30,8 @@ namespace uuid = boost::uuids;
 #define BROADCAST_TIMEOUT_MS 1000
 #define MAXEVENTS 1 // open tcp connections + 1
 
+// Bad practice, move exchange into a class and refactor
+static ExchangeLogger logger_("exchange.log");
 
 struct BuyOrder {
     uint8_t orderId[16];
@@ -170,6 +174,12 @@ void notify_of_sale(std::set<SellOrder>::iterator sellOrder, std::set<BuyOrder>:
     std::cout << "Sale happened: " << amount << " units of " << *stockId
               << " at " << unitPriceCents << " cents per unit.\n"
               << "Seller ID: " << sellOrder->sellerId << ", Buyer ID: " << buyOrder->buyerId << std::endl;
+
+    logger_.log_trade(buyOrder->orderId,
+                 sellOrder->orderId,
+                 *stockId,
+                 unitPriceCents,
+                 amount);
 }
 
 void match_orders(std::unordered_map<std::string, Orders> *orders,
@@ -210,10 +220,16 @@ std::pair<bool, std::string> handleMakeOrderRequest(
 
     if(req.getOrderType() == OrderType::BUY){
         BuyOrder order;
-        order.unitPriceCents = req.getPriceCents();
+        order.unitPriceCents = req.getUnitPriceCents();
         order.buyerId = req.getRequesterId();
         order.orderAmount = req.getOrderAmount();
         order.orderAtUnix = currentUnixTime();
+
+        logger_.log_order(ExchangeLogger::LogLevel::INFO,
+                 order.orderId,
+                 req.getStockId(),
+                 order.unitPriceCents,
+                 order.orderAmount);
 
         uuid::random_generator generator;
         uuid::uuid uuid = generator();
@@ -225,10 +241,16 @@ std::pair<bool, std::string> handleMakeOrderRequest(
         return std::make_pair(true, req.getStockId());
     } else {
         SellOrder order;
-        order.unitPriceCents = req.getPriceCents();
+        order.unitPriceCents = req.getUnitPriceCents();
         order.sellerId = req.getRequesterId();
         order.orderAmount = req.getOrderAmount();
         order.orderAtUnix = currentUnixTime();
+
+        logger_.log_order(ExchangeLogger::LogLevel::INFO,
+                 order.orderId,
+                 req.getStockId(),
+                 order.unitPriceCents,
+                 order.orderAmount);
 
         uuid::random_generator generator;
         uuid::uuid uuid = generator();
@@ -258,6 +280,7 @@ handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr, std::unordere
 
     while(sIt != sEnd){
         if(std::equal(sIt->orderId, sIt->orderId + 16, cancelOrderId.begin())){
+            logger_.log_system(ExchangeLogger::LogLevel::INFO, "Order cancelled: " + std::string(stockId));
             sellOrders->erase(sIt);
             response->setStatusCode(204);
             response->setResponseMsg("order successfully deleted");
@@ -272,6 +295,7 @@ handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr, std::unordere
 
     while(bIt != bEnd){
         if(std::equal(bIt->orderId, bIt->orderId + 16, cancelOrderId.begin())){
+            logger_.log_system(ExchangeLogger::LogLevel::INFO, "Order cancelled: " + std::string(stockId));
             buyOrders->erase(bIt);
             response->setStatusCode(204);
             response->setResponseMsg("order successfully deleted");
@@ -287,6 +311,8 @@ handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr, std::unordere
 }
 
 int main() {
+    logger_.log_system(ExchangeLogger::LogLevel::INFO, "===== Exchange starting up =====");
+
     // global declarations
     // matching engine data structures
 
@@ -374,12 +400,13 @@ int main() {
     int nfds = 0;
 
     // OPTION: can optimize by using edge-triggered polling and adding open tcp connections to events (increase max_events to servers + 1)
-    while(true){
+    while(true) {
         // event loop
         // handle incoming requests
         nfds = epoll_wait(epollfd, events, MAXEVENTS, BROADCAST_TIMEOUT_MS);
         if (nfds == -1) {
             perror("epoll_wait failed");
+            logger_.log_system(ExchangeLogger::LogLevel::ERROR, "===== Failed to handle incoming request, Exiting =====");
             exit(EXIT_FAILURE);
         }
         // handle matching requests
@@ -420,5 +447,7 @@ int main() {
         // broadcast_opt requests to buy/sell
         broadcast_market_data(broadcastfd, &broadcast_addr, &orders);
     }
+
+    logger_.log_system(ExchangeLogger::LogLevel::INFO, "===== Exchange shutting down =====");
     return 0;
 }
