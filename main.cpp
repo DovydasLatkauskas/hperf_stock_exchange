@@ -13,8 +13,10 @@
 #include <capnp/serialize-packed.h>
 #include "network_requests.capnp.h"
 #include "exchange_orders_broadcast.capnp.h"
+#include "server_response.capnp.h"
 
 #include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 
 namespace uuid = boost::uuids;
@@ -66,7 +68,6 @@ void broadcast_market_data(const int sockfd, const sockaddr_in *broadcast_addr,
 
     auto ordersMap = *ordersPtr;
     capnp::MallocMessageBuilder message;
-
     BroadcastStruct::Builder broadcastMsg = message.initRoot<BroadcastStruct>();
     capnp::List<StockIdOrderListsTuple>::Builder stocks = broadcastMsg.initOrders(ordersMap.size());
 
@@ -202,8 +203,9 @@ void match_orders(std::unordered_map<std::string, Orders> *orders,
 }
 
 // returns whether a new order has been created and the stock
-std::pair<bool, std::string> handleMakeOrderRequest(NetworkRequest::Reader *requestReaderPtr,
-                                                    std::unordered_map<std::string, Orders> *orders) {
+std::pair<bool, std::string> handleMakeOrderRequest(
+        NetworkRequest::Reader *requestReaderPtr, std::unordered_map<std::string, Orders> *orders,
+                       ServerResponse::Builder *response) {
     auto req = (*requestReaderPtr).getMakeOrderRequest();
 
     if(req.getOrderType() == OrderType::BUY){
@@ -218,6 +220,8 @@ std::pair<bool, std::string> handleMakeOrderRequest(NetworkRequest::Reader *requ
         std::copy(uuid.begin(), uuid.end(), order.orderId);
 
         (*orders)[req.getStockId()].buyOrders.insert(order);
+        response->setStatusCode(202);
+        response->setResponseMsg("buy order created, order id: " + uuid::to_string(uuid));
         return std::make_pair(true, req.getStockId());
     } else {
         SellOrder order;
@@ -231,13 +235,16 @@ std::pair<bool, std::string> handleMakeOrderRequest(NetworkRequest::Reader *requ
         std::copy(uuid.begin(), uuid.end(), order.orderId);
 
         (*orders)[req.getStockId()].sellOrders.insert(order);
+        response->setStatusCode(202);
+        response->setResponseMsg("sell order created, order id: " + uuid::to_string(uuid));
         return std::make_pair(true, req.getStockId());
     }
 }
 
 // returns whether a new order has been created and the stock
-std::pair<bool, std::string> handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr,
-                                                      std::unordered_map<std::string, Orders> *orders) {
+std::pair<bool, std::string>
+handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr, std::unordered_map<std::string, Orders> *orders,
+                         ServerResponse::Builder *response) {
     auto req = (*requestReaderPtr).getCancelOrderRequest();
 
     auto bytes = req.getCancelOrderId().asBytes();
@@ -252,8 +259,11 @@ std::pair<bool, std::string> handleCancelOrderRequest(NetworkRequest::Reader *re
     while(sIt != sEnd){
         if(std::equal(sIt->orderId, sIt->orderId + 16, cancelOrderId.begin())){
             sellOrders->erase(sIt);
+            response->setStatusCode(204);
+            response->setResponseMsg("order successfully deleted");
             return std::make_pair(false, req.getStockId());
         }
+        ++sIt;
     }
 
     auto buyOrders = &(*orders)[req.getStockId()].sellOrders;
@@ -263,10 +273,15 @@ std::pair<bool, std::string> handleCancelOrderRequest(NetworkRequest::Reader *re
     while(bIt != bEnd){
         if(std::equal(bIt->orderId, bIt->orderId + 16, cancelOrderId.begin())){
             buyOrders->erase(bIt);
+            response->setStatusCode(204);
+            response->setResponseMsg("order successfully deleted");
             return std::make_pair(false, req.getStockId());
         }
+        ++bIt;
     }
 
+    response->setStatusCode(404);
+    response->setResponseMsg("order could not be found");
     std::cerr << "Order ID not found for cancellation: " << req.getStockId().cStr() << std::endl; // TODO: return error to caller
     return std::make_pair(false, req.getStockId());
 }
@@ -376,23 +391,29 @@ int main() {
                 perror("accept failed");
             }
 
+            capnp::MallocMessageBuilder message;
+            ServerResponse::Builder response = message.initRoot<ServerResponse>();
+
             // TODO: AUTH, request validation
             capnp::StreamFdMessageReader messageReader(client_fd);
             auto request = messageReader.getRoot<NetworkRequest>();
             std::pair<bool, std::string> rsp;
             if(request.isMakeOrderRequest()){
-                rsp = handleMakeOrderRequest(&request, &orders);
+                rsp = handleMakeOrderRequest(&request, &orders, &response);
             } else if(request.isCancelOrderRequest()){
-                rsp = handleCancelOrderRequest(&request, &orders);
+                rsp = handleCancelOrderRequest(&request, &orders, &response);
             } else {
-                perror("unknown request type");
+                response.setStatusCode(400);
+                response.setResponseMsg("Unrecognized request type");
             }
 
             // perform matching
             if(rsp.first){
                 match_orders(&orders, &(rsp.second));
             }
-            // TODO: provide a response
+
+            // provide a response
+            capnp::writeMessageToFd(client_fd, message); // TODO: handle thrown exceptions
 
             close(client_fd);
         }
