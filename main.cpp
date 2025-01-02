@@ -3,7 +3,6 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <vector>
-#include <queue>
 #include <chrono>
 #include <sys/epoll.h>
 #include <fcntl.h>
@@ -13,9 +12,9 @@
 #include "exchange_logger.h"
 
 #include <capnp/serialize-packed.h>
-#include "capnp/cpp implementations/network_requests.capnp.h"
-#include "capnp/cpp implementations/exchange_orders_broadcast.capnp.h"
-#include "capnp/cpp implementations/server_response.capnp.h"
+#include "capnp/network_requests.capnp.h"
+#include "capnp/exchange_orders_broadcast.capnp.h"
+#include "capnp/server_response.capnp.h"
 
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>

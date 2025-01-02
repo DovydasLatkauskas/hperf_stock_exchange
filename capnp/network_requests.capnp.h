@@ -109,7 +109,7 @@ public:
 
   inline  ::int32_t getOrderAmount() const;
 
-  inline  ::int32_t getPriceCents() const;
+  inline  ::int32_t getUnitPriceCents() const;
 
   inline  ::OrderType getOrderType() const;
 
@@ -154,8 +154,8 @@ public:
   inline  ::int32_t getOrderAmount();
   inline void setOrderAmount( ::int32_t value);
 
-  inline  ::int32_t getPriceCents();
-  inline void setPriceCents( ::int32_t value);
+  inline  ::int32_t getUnitPriceCents();
+  inline void setUnitPriceCents( ::int32_t value);
 
   inline  ::OrderType getOrderType();
   inline void setOrderType( ::OrderType value);
@@ -448,16 +448,16 @@ inline void MakeOrderRequest::Builder::setOrderAmount( ::int32_t value) {
       ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
 }
 
-inline  ::int32_t MakeOrderRequest::Reader::getPriceCents() const {
+inline  ::int32_t MakeOrderRequest::Reader::getUnitPriceCents() const {
   return _reader.getDataField< ::int32_t>(
       ::capnp::bounded<2>() * ::capnp::ELEMENTS);
 }
 
-inline  ::int32_t MakeOrderRequest::Builder::getPriceCents() {
+inline  ::int32_t MakeOrderRequest::Builder::getUnitPriceCents() {
   return _builder.getDataField< ::int32_t>(
       ::capnp::bounded<2>() * ::capnp::ELEMENTS);
 }
-inline void MakeOrderRequest::Builder::setPriceCents( ::int32_t value) {
+inline void MakeOrderRequest::Builder::setUnitPriceCents( ::int32_t value) {
   _builder.setDataField< ::int32_t>(
       ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
 }
