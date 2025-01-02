@@ -11,9 +11,9 @@
 #include <random>
 
 #include <capnp/serialize-packed.h>
-#include "network_requests.capnp.h"
-#include "exchange_orders_broadcast.capnp.h"
-#include "server_response.capnp.h"
+#include "capnp/cpp implementations/network_requests.capnp.h"
+#include "capnp/cpp implementations/exchange_orders_broadcast.capnp.h"
+#include "capnp/cpp implementations/server_response.capnp.h"
 
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
