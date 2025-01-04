@@ -32,7 +32,7 @@ struct ServerResponse {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(f81e4d188f5cb6b2, 1, 1)
+    CAPNP_DECLARE_STRUCT_HEADER(f81e4d188f5cb6b2, 1, 2)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -62,6 +62,9 @@ public:
 
   inline bool hasResponseMsg() const;
   inline  ::capnp::Text::Reader getResponseMsg() const;
+
+  inline bool hasCreatedOrderId() const;
+  inline  ::capnp::Data::Reader getCreatedOrderId() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -100,6 +103,13 @@ public:
   inline  ::capnp::Text::Builder initResponseMsg(unsigned int size);
   inline void adoptResponseMsg(::capnp::Orphan< ::capnp::Text>&& value);
   inline ::capnp::Orphan< ::capnp::Text> disownResponseMsg();
+
+  inline bool hasCreatedOrderId();
+  inline  ::capnp::Data::Builder getCreatedOrderId();
+  inline void setCreatedOrderId( ::capnp::Data::Reader value);
+  inline  ::capnp::Data::Builder initCreatedOrderId(unsigned int size);
+  inline void adoptCreatedOrderId(::capnp::Orphan< ::capnp::Data>&& value);
+  inline ::capnp::Orphan< ::capnp::Data> disownCreatedOrderId();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -175,6 +185,40 @@ inline void ServerResponse::Builder::adoptResponseMsg(
 inline ::capnp::Orphan< ::capnp::Text> ServerResponse::Builder::disownResponseMsg() {
   return ::capnp::_::PointerHelpers< ::capnp::Text>::disown(_builder.getPointerField(
       ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline bool ServerResponse::Reader::hasCreatedOrderId() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool ServerResponse::Builder::hasCreatedOrderId() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Data::Reader ServerResponse::Reader::getCreatedOrderId() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Data::Builder ServerResponse::Builder::getCreatedOrderId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void ServerResponse::Builder::setCreatedOrderId( ::capnp::Data::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Data>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Data::Builder ServerResponse::Builder::initCreatedOrderId(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void ServerResponse::Builder::adoptCreatedOrderId(
+    ::capnp::Orphan< ::capnp::Data>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Data>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Data> ServerResponse::Builder::disownCreatedOrderId() {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
 }
 
 

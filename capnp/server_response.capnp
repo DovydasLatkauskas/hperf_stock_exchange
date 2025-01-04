@@ -3,4 +3,5 @@
 struct ServerResponse {
     statusCode @0 :Int32;
     responseMsg @1 :Text;
+    createdOrderId @2 :Data;
 }
