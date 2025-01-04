@@ -17,7 +17,6 @@
 #include "capnp/server_response.capnp.h"
 
 #include <boost/uuid/uuid.hpp>
-#include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 
 namespace uuid = boost::uuids;
@@ -33,7 +32,7 @@ namespace uuid = boost::uuids;
 static ExchangeLogger logger_("exchange.log");
 
 struct BuyOrder {
-    uint8_t orderId[16];
+    std::array<uint8_t, 16> orderId;
     int buyerId;
     mutable int orderAmount; // need mutability for order matching, make sure to not use in comparison overload
     int unitPriceCents;
@@ -47,7 +46,7 @@ struct BuyOrder {
 };
 
 struct SellOrder {
-    uint8_t orderId[16];
+    std::array<uint8_t, 16> orderId;
     int sellerId;
     mutable int orderAmount; // need mutability for order matching, make sure to not use in comparison overload
     int unitPriceCents;
@@ -122,12 +121,11 @@ long currentUnixTime() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-void generateRandomOrderId(uint8_t* id, size_t length) {
+void generateRandomOrderId(std::array<uint8_t, 16>& id) {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, 255);
-
-    for (size_t i = 0; i < length; ++i) {
+    std::uniform_int_distribution<uint8_t> dis(0, 255);
+    for (size_t i = 0; i < 16; ++i) {
         id[i] = static_cast<uint8_t>(dis(gen));
     }
 }
@@ -145,7 +143,9 @@ void populate_exchange_with_test_data(std::unordered_map<std::string, Orders> *o
     for (const auto& stock : *stockList) {
         for (int i = 0; i < 25; ++i) {
             SellOrder sOrder;
-            generateRandomOrderId(sOrder.orderId, 16);
+            uuid::random_generator generator;
+            uuid::uuid uuid = generator();
+            std::copy(uuid.begin(), uuid.end(), sOrder.orderId.begin());
             sOrder.sellerId = traderIdDist(gen);
             sOrder.orderAmount = amountDist(gen);
             sOrder.unitPriceCents = sellPriceDist(gen);
@@ -156,7 +156,9 @@ void populate_exchange_with_test_data(std::unordered_map<std::string, Orders> *o
 
         for (int i = 0; i < 25; ++i) {
             BuyOrder bOrder;
-            generateRandomOrderId(bOrder.orderId, 16);
+            uuid::random_generator generator;
+            uuid::uuid uuid = generator();
+            std::copy(uuid.begin(), uuid.end(), bOrder.orderId.begin());
             bOrder.buyerId = traderIdDist(gen);
             bOrder.orderAmount = amountDist(gen);
             bOrder.unitPriceCents = buyPriceDist(gen);
@@ -230,13 +232,16 @@ std::pair<bool, std::string> handleMakeOrderRequest(
                  order.unitPriceCents,
                  order.orderAmount);
 
-        uuid::random_generator generator;
+        uuid::random_generator generator; // TODO: optimise to instantiate the generator once and reuse
         uuid::uuid uuid = generator();
-        std::copy(uuid.begin(), uuid.end(), order.orderId);
+        std::copy(uuid.begin(), uuid.end(), order.orderId.begin());
 
         (*orders)[req.getStockId()].buyOrders.insert(order);
         response->setStatusCode(202);
-        response->setResponseMsg("buy order created, order id: " + uuid::to_string(uuid));
+        response->setResponseMsg("buy order created");
+        auto createdOrderId = response->initCreatedOrderId(uuid.size());
+        std::copy(uuid.begin(), uuid.end(), createdOrderId.begin());
+
         return std::make_pair(true, req.getStockId());
     } else {
         SellOrder order;
@@ -253,11 +258,14 @@ std::pair<bool, std::string> handleMakeOrderRequest(
 
         uuid::random_generator generator;
         uuid::uuid uuid = generator();
-        std::copy(uuid.begin(), uuid.end(), order.orderId);
+        std::copy(uuid.begin(), uuid.end(), order.orderId.begin());
 
         (*orders)[req.getStockId()].sellOrders.insert(order);
         response->setStatusCode(202);
-        response->setResponseMsg("sell order created, order id: " + uuid::to_string(uuid));
+        response->setResponseMsg("sell order created");
+        auto createdOrderId = response->initCreatedOrderId(uuid.size());
+        std::copy(uuid.begin(), uuid.end(), createdOrderId.begin());
+
         return std::make_pair(true, req.getStockId());
     }
 }
@@ -278,7 +286,7 @@ handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr, std::unordere
     auto sEnd = sellOrders->end();
 
     while(sIt != sEnd){
-        if(std::equal(sIt->orderId, sIt->orderId + 16, cancelOrderId.begin())){
+        if(cancelOrderId == sIt->orderId){
             logger_.log_system(ExchangeLogger::LogLevel::INFO, "Order cancelled: " + std::string(stockId));
             sellOrders->erase(sIt);
             response->setStatusCode(204);
@@ -293,7 +301,7 @@ handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr, std::unordere
     auto bEnd = buyOrders->end();
 
     while(bIt != bEnd){
-        if(std::equal(bIt->orderId, bIt->orderId + 16, cancelOrderId.begin())){
+        if(bIt->orderId == cancelOrderId){
             logger_.log_system(ExchangeLogger::LogLevel::INFO, "Order cancelled: " + std::string(stockId));
             buyOrders->erase(bIt);
             response->setStatusCode(204);

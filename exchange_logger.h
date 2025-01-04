@@ -48,7 +48,7 @@ public:
         outfile_.close();
     }
 
-    void log_order(const LogLevel level, const uint8_t* orderId,
+    void log_order(const LogLevel level, const std::array<uint8_t, 16>& orderId,
                   const std::string& symbol, const int price, const int quantity) {
         ExchangeLogMessage msg{
             .level = level,
@@ -62,7 +62,7 @@ public:
         enqueue_message(msg);
     }
 
-    void log_trade(const uint8_t* buyOrderId, const uint8_t* sellOrderId,
+    void log_trade(const std::array<uint8_t, 16>& buyOrderId, const std::array<uint8_t, 16>& sellOrderId, // TODO: sellerId not logged
                   const std::string& symbol, const int price, const int quantity) {
         ExchangeLogMessage msg{
             .level = LogLevel::INFO,
