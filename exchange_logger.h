@@ -9,11 +9,16 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
-#include <cstring>
+#include <algorithm>
 #include <condition_variable>
 
 class ExchangeLogger {
 public:
+    ExchangeLogger(const ExchangeLogger&) = delete;
+    ExchangeLogger& operator=(const ExchangeLogger&) = delete;
+    ExchangeLogger(ExchangeLogger&&) = delete;
+    ExchangeLogger& operator=(ExchangeLogger&&) = delete;
+
     enum class LogLevel {
         DEBUG,
         INFO,
@@ -25,7 +30,8 @@ public:
         LogLevel level;
         std::string timestamp;
         std::string message;
-        uint8_t orderId[16];
+        std::array<uint8_t, 16> orderId{};
+        std::array<uint8_t, 16> secondaryId{};
         std::string symbol;
         int price = 0;
         int quantity = 0;
@@ -58,12 +64,13 @@ public:
             .price = price,
             .quantity = quantity
         };
-        std::memcpy(msg.orderId, orderId, 16);
+        msg.orderId = orderId;
         enqueue_message(msg);
     }
 
-    void log_trade(const std::array<uint8_t, 16>& buyOrderId, const std::array<uint8_t, 16>& sellOrderId, // TODO: sellerId not logged
-                  const std::string& symbol, const int price, const int quantity) {
+    void log_trade(const std::array<uint8_t, 16>& buyOrderId,
+                   const std::array<uint8_t, 16>& sellOrderId,
+                   const std::string& symbol, const int price, const int quantity) {
         ExchangeLogMessage msg{
             .level = LogLevel::INFO,
             .timestamp = get_current_time(),
@@ -72,8 +79,8 @@ public:
             .price = price,
             .quantity = quantity
         };
-
-        std::memcpy(msg.orderId, buyOrderId, 16);
+        msg.orderId = buyOrderId;
+        msg.secondaryId = sellOrderId;
         enqueue_message(msg);
     }
 
@@ -83,7 +90,6 @@ public:
             .timestamp = get_current_time(),
             .message = message
         };
-        std::memset(msg.orderId, 0, 16);
         enqueue_message(msg);
     }
 
@@ -95,12 +101,14 @@ private:
     std::atomic<bool> running_{true};
     std::thread logger_thread_;
     std::condition_variable cv_;
+    std::chrono::milliseconds flush_interval_{1000};
+    std::chrono::steady_clock::time_point last_flush_;
 
     static std::string get_current_time() {
         const auto now = std::chrono::system_clock::now();
         const auto now_time = std::chrono::system_clock::to_time_t(now);
-        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()) % 1000;
+        const auto now_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
         
         std::stringstream ss;
         ss << std::put_time(std::localtime(&now_time), "%Y-%m-%d %H:%M:%S")
@@ -118,13 +126,26 @@ private:
         }
     }
 
-    static std::string orderid_to_string(const uint8_t* orderId) {
+    static std::string order_id_to_string(const std::array<uint8_t, 16>& orderId) {
         std::stringstream ss;
-        for (int i = 0; i < 16; ++i) {
-            ss << std::hex << std::setw(2) << std::setfill('0') 
-               << static_cast<int>(orderId[i]);
+        for (const auto& byte : orderId) {
+            ss << std::hex << std::setw(2) << std::setfill('0')
+               << static_cast<int>(byte);
         }
         return ss.str();
+    }
+
+    static bool has_order_id(const std::array<uint8_t, 16>& orderId) {
+        return std::any_of(orderId.begin(), orderId.end(),
+                          [](const uint8_t b) { return b != 0; });
+    }
+
+    void maybe_flush() {
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_flush_ > flush_interval_) {
+            outfile_.flush();
+            last_flush_ = now;
+        }
     }
 
     void enqueue_message(const ExchangeLogMessage& msg) {
@@ -147,15 +168,14 @@ private:
                         << level_to_string(msg.level) << "] "
                         << msg.message;
 
-                bool hasOrderId = false;
-                for (const unsigned char i : msg.orderId) {
-                    if (i != 0) {
-                        hasOrderId = true;
-                        break;
-                    }
+                // Check primary order ID
+                if (has_order_id(msg.orderId)) {
+                    outfile_ << " OrderID:" << order_id_to_string(msg.orderId);
                 }
-                if (hasOrderId) {
-                    outfile_ << " OrderID:" << orderid_to_string(msg.orderId);
+
+                // Check secondary order ID for trades
+                if (has_order_id(msg.secondaryId)) {
+                    outfile_ << " MatchedWith:" << order_id_to_string(msg.secondaryId);
                 }
                 
                 if (!msg.symbol.empty()) {
@@ -171,9 +191,8 @@ private:
                 outfile_ << std::endl;
                 message_queue_.pop();
             }
-            
-            outfile_.flush();
-            lock.unlock();
+
+            maybe_flush();
         }
     }
 };
