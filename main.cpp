@@ -59,7 +59,7 @@ struct SellOrder {
     }
 };
 
-// do dynamic size structs have any issues?
+// TODO: use a more efficient DS // use performance testing
 struct Orders {
     std::set<BuyOrder> buyOrders;
     std::set<SellOrder> sellOrders;
@@ -317,6 +317,34 @@ handleCancelOrderRequest(NetworkRequest::Reader *requestReaderPtr, std::unordere
     return std::make_pair(false, req.getStockId());
 }
 
+void handle_request(std::unordered_map<std::string, Orders> &orders, int client_fd) {
+    capnp::MallocMessageBuilder message;
+    ServerResponse::Builder response = message.initRoot<ServerResponse>();
+
+    // TODO: AUTH, request validation
+    capnp::StreamFdMessageReader messageReader(client_fd);
+    auto request = messageReader.getRoot<NetworkRequest>();
+    std::pair<bool, std::string> rsp;
+    if(request.isMakeOrderRequest()){
+        rsp = handleMakeOrderRequest(&request, &orders, &response);
+    } else if(request.isCancelOrderRequest()){
+        rsp = handleCancelOrderRequest(&request, &orders, &response);
+    } else {
+        response.setStatusCode(400);
+        response.setResponseMsg("Unrecognized request type");
+    }
+
+    // perform matching
+    if(rsp.first){
+        match_orders(&orders, &(rsp.second));
+    }
+
+    // provide a response
+    capnp::writeMessageToFd(client_fd, message); // TODO: handle thrown exceptions
+
+    close(client_fd);
+}
+
 int main() {
     logger_.log_system(ExchangeLogger::LogLevel::INFO, "===== Exchange starting up =====");
 
@@ -424,32 +452,9 @@ int main() {
             if(client_fd == -1){
                 perror("accept failed");
             }
-
-            capnp::MallocMessageBuilder message;
-            ServerResponse::Builder response = message.initRoot<ServerResponse>();
-
-            // TODO: AUTH, request validation
-            capnp::StreamFdMessageReader messageReader(client_fd);
-            auto request = messageReader.getRoot<NetworkRequest>();
-            std::pair<bool, std::string> rsp;
-            if(request.isMakeOrderRequest()){
-                rsp = handleMakeOrderRequest(&request, &orders, &response);
-            } else if(request.isCancelOrderRequest()){
-                rsp = handleCancelOrderRequest(&request, &orders, &response);
-            } else {
-                response.setStatusCode(400);
-                response.setResponseMsg("Unrecognized request type");
+            else {
+                handle_request(orders, client_fd);
             }
-
-            // perform matching
-            if(rsp.first){
-                match_orders(&orders, &(rsp.second));
-            }
-
-            // provide a response
-            capnp::writeMessageToFd(client_fd, message); // TODO: handle thrown exceptions
-
-            close(client_fd);
         }
         // broadcast_opt requests to buy/sell
         broadcast_market_data(broadcastfd, &broadcast_addr, &orders);

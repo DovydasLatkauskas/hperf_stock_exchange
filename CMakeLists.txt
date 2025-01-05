@@ -7,7 +7,7 @@ find_package(Boost 1.74.0 REQUIRED COMPONENTS system filesystem)
 find_package(CapnProto REQUIRED)
 include_directories(${CapnProto_INCLUDE_DIRS})
 
-add_executable(stock_exchange main.cpp "capnp/network_requests.capnp.c++")
+add_executable(stock_exchange main.cpp)
 target_link_libraries(stock_exchange
         PRIVATE
         Boost::system
