@@ -26,12 +26,14 @@ public:
         ERROR
     };
 
+    static constexpr size_t ORDER_ID_SIZE = 16;
+
     struct ExchangeLogMessage {
         LogLevel level;
         std::string timestamp;
         std::string message;
-        std::array<uint8_t, 16> orderId{};
-        std::array<uint8_t, 16> secondaryId{};
+        std::array<uint8_t, ORDER_ID_SIZE> orderId{};
+        std::array<uint8_t, ORDER_ID_SIZE> secondaryId{};
         std::string symbol;
         int price = 0;
         int quantity = 0;
@@ -43,7 +45,10 @@ public:
             throw std::runtime_error("Failed to open log file: " + filename);
         }
         
-        logger_thread_ = std::thread(&ExchangeLogger::process_logs, this);
+        logger_thread_ = std::thread([this] {
+            pthread_setname_np(pthread_self(), "ExchangeLoggerThread");
+            this->process_logs();
+        });
     }
 
     ~ExchangeLogger() {
@@ -54,7 +59,7 @@ public:
         outfile_.close();
     }
 
-    void log_order(const LogLevel level, const std::array<uint8_t, 16>& orderId,
+    void log_order(const LogLevel level, const std::array<uint8_t, ORDER_ID_SIZE>& orderId,
                   const std::string& symbol, const int price, const int quantity) {
         ExchangeLogMessage msg{
             .level = level,
@@ -68,8 +73,8 @@ public:
         enqueue_message(msg);
     }
 
-    void log_trade(const std::array<uint8_t, 16>& buyOrderId,
-                   const std::array<uint8_t, 16>& sellOrderId,
+    void log_trade(const std::array<uint8_t, ORDER_ID_SIZE>& buyOrderId,
+                   const std::array<uint8_t, ORDER_ID_SIZE>& sellOrderId,
                    const std::string& symbol, const int price, const int quantity) {
         ExchangeLogMessage msg{
             .level = LogLevel::INFO,
@@ -91,6 +96,13 @@ public:
             .message = message
         };
         enqueue_message(msg);
+    }
+
+    // For manual flushing
+    void flush() {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        outfile_.flush();
+        last_flush_ = std::chrono::steady_clock::now();
     }
 
 private:
@@ -126,7 +138,7 @@ private:
         }
     }
 
-    static std::string order_id_to_string(const std::array<uint8_t, 16>& orderId) {
+    static std::string order_id_to_string(const std::array<uint8_t, ORDER_ID_SIZE>& orderId) {
         std::stringstream ss;
         for (const auto& byte : orderId) {
             ss << std::hex << std::setw(2) << std::setfill('0')
@@ -135,7 +147,7 @@ private:
         return ss.str();
     }
 
-    static bool has_order_id(const std::array<uint8_t, 16>& orderId) {
+    static bool has_order_id(const std::array<uint8_t, ORDER_ID_SIZE>& orderId) {
         return std::any_of(orderId.begin(), orderId.end(),
                           [](const uint8_t b) { return b != 0; });
     }
